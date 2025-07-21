@@ -165,7 +165,7 @@ async fn main() {
         }
         
         // Print the formatted table
-        println!("{}", table);
+        println!("\n{}", table);
         
     } else {
         // Multiple probe mode: check the same port multiple times
@@ -173,9 +173,11 @@ async fn main() {
         let port = ports[0];  // We know there's only one port when n > 1
         
         // Run n probes sequentially
+        println!(); 
         for i in 1..=n {
             let result = check_port(dest, port, timeout).await;
             println!("probe {}: {}:{} -> {}", i, dest, port, result);
         }
+        println!();
     }
 }
