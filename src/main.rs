@@ -396,7 +396,10 @@ async fn main() {
         println!("WHAT IT DOES:");
         println!("  The --inspect flag enables deep analysis to detect proxy interception,");
         println!("  firewall filtering, and other network anomalies that may cause the");
-        println!("  initial TCP connection status to be misleading.\n");
+        println!("  initial TCP connection status to be misleading, such as ZTNA solutions.");
+        println!("  These can interfere with your own internal port checking of your own");
+        println!("  company network depending on how they are configured. E.g. reporting");
+        println!("  \"open\" when in fact they are not.\n");
         
         println!("HOW IT WORKS:");
         println!("  For each open port, two separate connection tests are performed:\n");
