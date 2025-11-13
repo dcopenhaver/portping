@@ -449,14 +449,25 @@ async fn main() {
         std::process::exit(1);
     }
     
-    let port_arg = port_arg.unwrap();
-    let dest = dest.unwrap();
+    let port_arg = port_arg.expect("port argument should be present after validation");
+    let dest = dest.expect("dest argument should be present after validation");
     let n = matches.get_one::<String>("n")                      // Get number of probes
         .map(|s| s.parse::<u32>().unwrap_or(1))                 // Parse to u32, default to 1
         .unwrap_or(1);                                          // If no value, use 1
     let timeout = matches.get_one::<String>("timeout")          // Get timeout value
         .map(|s| s.parse::<u64>().unwrap_or(3000))              // Parse to u64, default to 3000
         .unwrap_or(3000);                                       // If no value, use 3000
+    
+    // Validate timeout bounds
+    if timeout < 1 {
+        eprintln!("Error: Timeout must be at least 1 millisecond.");
+        std::process::exit(1);
+    }
+    if timeout > 300000 {  // 5 minutes
+        eprintln!("Error: Timeout cannot exceed 300000 milliseconds (5 minutes).");
+        std::process::exit(1);
+    }
+    
     let inspect = matches.get_flag("inspect");                  // Get inspect flag
 
     // Parse the port string into a vector of port numbers
@@ -480,6 +491,15 @@ async fn main() {
         std::process::exit(1);
     }
 
+    // Validate DNS resolution before attempting any port checks
+    // Use first port to test resolution (any port will do for DNS check)
+    let test_addr = format!("{}:{}", dest, ports[0]);
+    if let Err(e) = test_addr.to_socket_addrs() {
+        eprintln!("Error: DNS resolution failed for '{}': {}", dest, e);
+        eprintln!("Please check the hostname or IP address and try again.");
+        std::process::exit(1);
+    }
+
     // Main logic - handle single probe vs multiple probes differently
     if n == 1 {
         // Single probe mode: check all ports in parallel for efficiency
@@ -499,10 +519,24 @@ async fn main() {
         
         // Collect all the results
         let mut results = Vec::new();
+        let mut failed_ports = Vec::new();
         for h in handles {
-            if let Ok(res) = h.await {  // Wait for each task to complete
-                results.push(res);
+            match h.await {
+                Ok(res) => results.push(res),
+                Err(e) => {
+                    // Task panicked - extract port info if possible
+                    eprintln!("Warning: Task failed with error: {}", e);
+                    if e.is_panic() {
+                        eprintln!("  A port check task panicked unexpectedly.");
+                    }
+                    failed_ports.push("unknown");
+                }
             }
+        }
+        
+        // Report if any tasks failed
+        if !failed_ports.is_empty() {
+            eprintln!("\nWarning: {} port check(s) failed to complete.\n", failed_ports.len());
         }
         
         // Display results in a nice table format
@@ -605,10 +639,6 @@ async fn main() {
                         // Both error = suspicious
                         (Some("error"), Some("error")) => {
                             reasons.push("both error");
-                        },
-                        // Single error on rx but tx worked = maybe suspicious
-                        (Some("error"), _) => {
-                            reasons.push("rx error");
                         },
                         _ => {}
                     }
