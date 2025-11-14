@@ -6,6 +6,9 @@ use ctable::{Table, Column, Justification};  // For creating formatted tables
 use std::net::{IpAddr, ToSocketAddrs};  // For IP address handling
 use tokio::io::AsyncReadExt;  // For async I/O operations
 
+// Layer 7 protocol detection module
+mod layer7_probes;
+
 /// Parse a string of ports into a vector of port numbers
 /// 
 /// This function handles three formats:
@@ -56,6 +59,7 @@ struct PortCheckResult {
     write_bytes: Option<usize>,    // Number of bytes read during write test
     write_result: Option<String>,  // Result of write test: "data", "closed", "timeout", "error"
     banner_preview: Option<String>, // First few bytes if data received
+    layer7_protocol: Option<String>, // Protocol detected via Layer 7 probing (for ambiguous cases)
 }
 
 /// Check if a specific port is open on a destination host
@@ -92,19 +96,27 @@ async fn check_port(dest: &str, port: u16, timeout_ms: u64, inspect: bool) -> Po
                 let peer_ip = peer_socket_addr.ip();
                 
                 // Perform inspection if requested
-                let (ip_matches, timing_suspicious, read_bytes, read_result, write_bytes, write_result, banner_preview) = if inspect {
+                let (ip_matches, timing_suspicious, read_bytes, read_result, write_bytes, write_result, banner_preview, layer7_protocol) = if inspect {
                     // Check if the peer IP matches any of the intended IPs
                     let ip_match = intended_ips.is_empty() || intended_ips.contains(&peer_ip);
                     
                     // Probe the connection to detect proxy behavior
                     let inspection = inspect_connection(dest, port, timeout_ms, connect_time, &peer_ip).await;
                     
+                    // If ambiguous (timeout/timeout), perform Layer 7 probing
+                    let l7_proto = if inspection.read_result == "timeout" && inspection.write_result == "timeout" {
+                        // Use shorter timeout for Layer 7 probes (1000ms)
+                        layer7_probes::layer7_probe(dest, port, 1000).await
+                    } else {
+                        None
+                    };
+                    
                     (Some(ip_match), Some(inspection.timing_suspicious), 
                      Some(inspection.read_bytes), Some(inspection.read_result),
                      Some(inspection.write_bytes), Some(inspection.write_result),
-                     inspection.banner_preview)
+                     inspection.banner_preview, l7_proto)
                 } else {
-                    (None, None, None, None, None, None, None)
+                    (None, None, None, None, None, None, None, None)
                 };
                 
                 PortCheckResult {
@@ -118,6 +130,7 @@ async fn check_port(dest: &str, port: u16, timeout_ms: u64, inspect: bool) -> Po
                     write_bytes,
                     write_result,
                     banner_preview,
+                    layer7_protocol,
                 }
             } else {
                 // Couldn't get peer address (shouldn't happen, but handle gracefully)
@@ -132,6 +145,7 @@ async fn check_port(dest: &str, port: u16, timeout_ms: u64, inspect: bool) -> Po
                     write_bytes: None,
                     write_result: None,
                     banner_preview: None,
+                    layer7_protocol: None,
                 }
             }
         },
@@ -146,6 +160,7 @@ async fn check_port(dest: &str, port: u16, timeout_ms: u64, inspect: bool) -> Po
             write_bytes: None,
             write_result: None,
             banner_preview: None,
+            layer7_protocol: None,
         },
         Err(_) => PortCheckResult {
             status: "filtered".to_string(),
@@ -158,6 +173,7 @@ async fn check_port(dest: &str, port: u16, timeout_ms: u64, inspect: bool) -> Po
             write_bytes: None,
             write_result: None,
             banner_preview: None,
+            layer7_protocol: None,
         },
     }
 }
@@ -215,10 +231,18 @@ async fn test_read_connection(stream: &mut TcpStream) -> (String, usize, Option<
 async fn test_write_connection(stream: &mut TcpStream) -> (String, usize, Option<String>) {
     use tokio::io::AsyncWriteExt;
     
-    // Send generic probe data
+    // Send generic probe data twice to trigger response from stubborn services
     let probe_data = b"\x00\x00\r\n";
     
-    // Try to write the probe data
+    // First probe
+    if let Err(_) = stream.write_all(probe_data).await {
+        return ("error".to_string(), 0, None);
+    }
+    
+    // Small pause before second probe
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    
+    // Second probe
     if let Err(_) = stream.write_all(probe_data).await {
         return ("error".to_string(), 0, None);
     }
@@ -408,31 +432,65 @@ async fn main() {
         println!("     - Detects services that send banners immediately (SSH, SMTP, FTP, etc.)");
         println!("     - Timeout: 100ms\n");
         println!("  2. Tx Test (Transmit/Write Test):");
-        println!("     - Establishes new connection and sends generic probe data");
+        println!("     - Establishes new connection and sends probe data (twice)");
         println!("     - Reads response to detect how service reacts to unexpected input");
         println!("     - Skipped if Rx test already confirmed real service with banner");
         println!("     - Timeout: 100ms\n");
+        println!("  3. Layer 7 Protocol Probing (if timeout/timeout at Layer 4):");
+        println!("     - Only runs for ambiguous timeout/timeout cases");
+        println!("     - Tries: TLS, HTTP, MySQL, PostgreSQL handshakes");
+        println!("     - Stops at first successful protocol detection");
+        println!("     - Timeout: 1000ms per protocol\n");
+        println!("  4. Extended Probe (last resort if all Layer 7 checks fail):");
+        println!("     - Sends multiple probe strings: \\r\\n, QUIT, EXIT, BYE");
+        println!("     - Waits 200ms after each probe");
+        println!("     - If service closes or responds → proves working (just slow)");
+        println!("     - If stays silent → truly ambiguous (receive-only OR dead)\n");
         
-        println!("SUSPICIOUS DETECTION CRITERIA:");
-        println!("  A port is marked as 'Suspicious' if ANY of the following are detected:\n");
-        println!("  • IP Mismatch: Responding IP differs from intended destination");
-        println!("  • Fast Timing: Connection time suspiciously fast for remote IP");
-        println!("                 (< 1ms for private IPs, < 5ms for public IPs)");
-        println!("  • Rx Closed: Connection closed immediately on read attempt");
-        println!("  • Both Timeout: Both Rx and Tx tests timeout (likely firewall blocking)");
-        println!("  • Both Error: Both tests encounter errors\n");
+        println!("SUSPICIOUS DETECTION (Three Confidence Levels):\n");
         
-        println!("NOT SUSPICIOUS:");
-        println!("  • Rx Test returns data (banner) - Confirms real service");
-        println!("  • Rx timeout + Tx closed/data - Normal for services expecting protocol\n");
+        println!("  YES - High Confidence Suspicious:");
+        println!("    • IP Mismatch: Responding IP differs from intended destination");
+        println!("    • Fast Timing: Connection time suspiciously fast for remote IP");
+        println!("                   (< 1ms for private IPs, < 5ms for public IPs)");
+        println!("    • Rx Closed: Connection closed immediately on read attempt");
+        println!("                 (before any data exchange → proxy rejecting)");
+        println!("    • I/O Errors: Persistent errors on both tests");
+        println!("    • Inconsistent: Error/timeout/closed mix patterns\n");
         
-        println!("EXAMPLE OUTPUT:");
-        println!("  Rx Test: data (42 bytes)  → Real service with banner (SSH, SMTP, etc.)");
-        println!("  Rx Test: timeout          → Service waiting for client to send first");
-        println!("  Rx Test: closed           → Suspicious: Connection closed immediately");
-        println!("  Tx Test: skipped          → Rx test already confirmed real service");
-        println!("  Tx Test: timeout          → No response to probe data");
-        println!("  Tx Test: closed           → Service closed connection after probe\n");
+        println!("  POSSIBLE - Ambiguous (Layer 4 and Layer 7 both inconclusive):");
+        println!("    • No Response: Both Rx and Tx timeout");
+        println!("      → Could be: client-first protocol (syslog) OR proxy without backend");
+        println!("    • Layer 7 probing attempted but no protocols matched");
+        println!("    • Still ambiguous - requires manual verification\n");
+        
+        println!("  NO - Not Suspicious (End-to-End Confirmed):");
+        println!("    • Data received: Service sends banner or responds to probe");
+        println!("    • Protocol validation: Rx timeout + Tx closed");
+        println!("      → Server received probe, validated format, closed connection");
+        println!("      → Proves end-to-end connectivity (HTTP/HTTPS, etc.)\n");
+        
+        println!("EXAMPLE SCENARIOS:");
+        println!("  • Real SSH service:");
+        println!("    Rx: data (banner) | Tx: skipped → Suspicious? NO");
+        println!("  • Real HTTP/HTTPS (validates protocol):");
+        println!("    Rx: timeout | Tx: closed → Suspicious? NO (protocol validation)");
+        println!("  • Real HTTPS (client-first with Layer 7 detection):");
+        println!("    Rx: timeout | Tx: timeout | Layer7: TLS → Suspicious? NO (TLS)");
+        println!("  • Real MySQL (server-first with Layer 7 detection):");
+        println!("    Rx: timeout | Tx: timeout | Layer7: MySQL → Suspicious? NO (MySQL)");
+        println!("  • Slow service (responds to extended probe):");
+        println!("    Rx: timeout | Tx: timeout | Layer7: none | Extended: closes → NO (Working)");
+        println!("  • Receive-only service (stays silent through all probes):");
+        println!("    Rx: timeout | Tx: timeout | Layer7: none | Extended: open → POSSIBLE");
+        println!("  • Proxy WITHOUT backend (ZTNA/Netskope):");
+        println!("    Rx: timeout | Tx: timeout | Layer7: none → Suspicious? POSSIBLE");
+        println!("  • Proxy that immediately rejects:");
+        println!("    Rx: closed | Tx: (not run) → Suspicious? YES (rx closed)");
+        println!("  • Firewall that drops packets:");
+        println!("    Status: filtered (timeout on connect) → Not in --inspect\n");
+        println!("NOTE: POSSIBLE verdicts require manual verification - check if the service");
+        println!("      is expected at that port to determine if suspicious or legitimate.\n");
         
         println!("{}\n", "=".repeat(80));
         std::process::exit(0);
@@ -619,34 +677,59 @@ async fn main() {
                     let rx = result.read_result.as_deref();
                     let tx = result.write_result.as_deref();
                     
+                    let mut ambiguous = false;
+                    
                     match (rx, tx) {
-                        // If we got data on rx, it's definitely a real service
-                        (Some("data"), _) => {
-                            // No additional suspicion - banner proves it's real
+                        // Definitive proof of real end-to-end service
+                        // Any data received (rx or tx) proves connection works
+                        (Some("data"), _) | (_, Some("data")) => {
+                            // No suspicion - data proves end-to-end connectivity
                         },
-                        // Both timeout = likely firewall blocking after handshake
-                        (Some("timeout"), Some("timeout")) => {
-                            reasons.push("both timeout");
+                        
+                        // Protocol validation = proof of working connection
+                        // Server received probe, validated protocol, closed connection
+                        // This proves end-to-end connectivity even if data was invalid
+                        (Some("timeout"), Some("closed")) => {
+                            // No suspicion - server processed our data (HTTP/HTTPS validation)
                         },
-                        // Rx timeout but tx got response = real service waiting for protocol
-                        (Some("timeout"), Some("closed") | Some("data")) => {
-                            // Normal behavior - service responded to our write
-                        },
-                        // Connection closed on rx = suspicious
+                        
+                        // HIGH CONFIDENCE SUSPICIOUS: immediate close or errors
+                        // Rx closed = connection accepted then immediately closed (proxy rejecting)
                         (Some("closed"), _) => {
                             reasons.push("rx closed");
                         },
-                        // Both error = suspicious
                         (Some("error"), Some("error")) => {
-                            reasons.push("both error");
+                            reasons.push("I/O errors");
                         },
+                        (Some("error"), _) | (_, Some("error")) => {
+                            reasons.push("inconsistent");
+                        },
+                        
+                        // LOW CONFIDENCE: ambiguous timeout/timeout
+                        // Could be client-first protocol (syslog) OR proxy without backend
+                        // Check if Layer 7 probing resolved the ambiguity
+                        (Some("timeout"), Some("timeout")) => {
+                            // If Layer 7 detected a protocol, it's proven working
+                            if result.layer7_protocol.is_none() {
+                                ambiguous = true;
+                            }
+                            // else: Layer 7 proved connectivity, treat as "No"
+                        },
+                        
                         _ => {}
                     }
                     
-                    let suspicious_str = if reasons.is_empty() {
-                        "No".to_string()
-                    } else {
+                    let suspicious_str = if !reasons.is_empty() {
                         format!("Yes ({})", reasons.join(", "))
+                    } else if ambiguous {
+                        "Possible (ambiguous)".to_string()
+                    } else {
+                        // Show Layer 7 protocol if detected for clarity
+                        if let Some(ref protocol) = result.layer7_protocol {
+                            format!("No ({})", protocol)
+                        } else {
+                            "No".to_string()
+                        }
                     };
                     row.push(suspicious_str);
                 } else {
@@ -676,22 +759,7 @@ async fn main() {
                 .map(|t| format!(" [{}ms]", t))
                 .unwrap_or_default();
             
-            if inspect {
-                // Determine if suspicious based on combined rx/tx results
-                let rx = result.read_result.as_deref();
-                let tx = result.write_result.as_deref();
-                
-                let is_suspicious = result.ip_matches == Some(false)
-                    || result.timing_suspicious == Some(true)
-                    || rx == Some("closed")
-                    || (rx == Some("timeout") && tx == Some("timeout"))
-                    || (rx == Some("error") && tx == Some("error"));
-                
-                let suspicious_flag = if is_suspicious { " SUSPICIOUS" } else { "" };
-                println!("probe {}: {}:{} -> {}{}{}{}", i, dest, port, result.status, peer_info, time_info, suspicious_flag);
-            } else {
-                println!("probe {}: {}:{} -> {}{}{}", i, dest, port, result.status, peer_info, time_info);
-            }
+            println!("probe {}: {}:{} -> {}{}{}", i, dest, port, result.status, peer_info, time_info);
         }
         println!();
     }
