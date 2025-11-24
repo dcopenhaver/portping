@@ -223,11 +223,11 @@ pub async fn try_extended_probe(dest: &str, port: u16, timeout_ms: u64) -> Optio
             Ok(Ok(0)) => {
                 // Connection closed - service processed our data and closed
                 // This proves it's a working service (just slow/stubborn)
-                return Some("Working".to_string());
+                return Some("Responsive".to_string());
             },
             Ok(Ok(_)) => {
                 // Got response - proves working service
-                return Some("Working".to_string());
+                return Some("Responsive".to_string());
             },
             Err(_) => {
                 // Timeout - no response yet, try next probe

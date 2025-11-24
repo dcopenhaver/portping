@@ -442,7 +442,7 @@ async fn main() {
         println!("     - Stops at first successful protocol detection");
         println!("     - Timeout: 1000ms per protocol\n");
         println!("  4. Extended Probe (last resort if all Layer 7 checks fail):");
-        println!("     - Sends multiple probe strings: \\r\\n, QUIT, EXIT, BYE");
+        println!("     - Sends 5 probe strings: \\r\\n, \\r\\n\\r\\n, QUIT, EXIT, BYE");
         println!("     - Waits 200ms after each probe");
         println!("     - If service closes or responds → proves working (just slow)");
         println!("     - If stays silent → truly ambiguous (receive-only OR dead)\n");
@@ -480,7 +480,7 @@ async fn main() {
         println!("  • Real MySQL (server-first with Layer 7 detection):");
         println!("    Rx: timeout | Tx: timeout | Layer7: MySQL → Suspicious? NO (MySQL)");
         println!("  • Slow service (responds to extended probe):");
-        println!("    Rx: timeout | Tx: timeout | Layer7: none | Extended: closes → NO (Working)");
+        println!("    Rx: timeout | Tx: timeout | Layer7: none | Extended: closes → NO (Responsive)");
         println!("  • Receive-only service (stays silent through all probes):");
         println!("    Rx: timeout | Tx: timeout | Layer7: none | Extended: open → POSSIBLE");
         println!("  • Proxy WITHOUT backend (ZTNA/Netskope):");
