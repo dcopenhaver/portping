@@ -146,3 +146,13 @@ MIT License - see LICENSE file for details
 ## Author
 
 David Copenhaver
+
+---
+
+## Disclaimer
+
+**THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.**
+
+**USE AT YOUR OWN RISK.** The author(s) make no guarantees about the fitness of this software for any particular purpose. You are solely responsible for determining the appropriateness of using this software and assume all risks associated with its use, including but not limited to network disruption, security vulnerabilities, data loss, or any other damages.
+
+By using this software, you acknowledge that you have read this disclaimer and agree to its terms.
