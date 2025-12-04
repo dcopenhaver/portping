@@ -239,6 +239,77 @@ pub async fn try_rdp_handshake(dest: &str, port: u16, timeout_ms: u64) -> Option
     }
 }
 
+/// Try SMB (Server Message Block) handshake
+/// SMB is used for Windows file sharing, typically on port 445 (or 139 for legacy)
+pub async fn try_smb_handshake(dest: &str, port: u16, timeout_ms: u64) -> Option<String> {
+    let addr = format!("{}:{}", dest, port);
+    let dur = Duration::from_millis(timeout_ms);
+    
+    let mut stream = match timeout(dur, TcpStream::connect(&addr)).await {
+        Ok(Ok(s)) => s,
+        _ => return None,
+    };
+    
+    // SMB Negotiate Protocol Request (SMB2/SMB3)
+    // NetBIOS Session Service header + SMB2 header + Negotiate request
+    let smb_request = vec![
+        // NetBIOS Session Service header (for port 445, this is minimal)
+        0x00, 0x00, 0x00, 0x85, // Length: 133 bytes of SMB data follows
+        
+        // SMB2 Header
+        0xfe, 0x53, 0x4d, 0x42, // Protocol: "\xfeSMB" (SMB2/3)
+        0x40, 0x00, // StructureSize: 64
+        0x00, 0x00, // CreditCharge: 0
+        0x00, 0x00, 0x00, 0x00, // Status: 0
+        0x00, 0x00, // Command: SMB2_NEGOTIATE (0x0000)
+        0x00, 0x00, // Credits: 0
+        0x00, 0x00, 0x00, 0x00, // Flags: 0
+        0x00, 0x00, 0x00, 0x00, // NextCommand: 0
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // MessageId: 0
+        0x00, 0x00, 0x00, 0x00, // Reserved: 0
+        0x00, 0x00, 0x00, 0x00, // TreeId: 0
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // SessionId: 0
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Signature: 0
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        
+        // SMB2 Negotiate Request
+        0x24, 0x00, // StructureSize: 36
+        0x05, 0x00, // DialectCount: 5
+        0x00, 0x00, // SecurityMode: 0
+        0x00, 0x00, // Reserved: 0
+        0x00, 0x00, 0x00, 0x00, // Capabilities: 0
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ClientGuid: 0
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ClientStartTime: 0
+        
+        // Dialects (SMB 2.0.2, 2.1, 3.0, 3.0.2, 3.1.1)
+        0x02, 0x02, // SMB 2.0.2
+        0x10, 0x02, // SMB 2.1
+        0x00, 0x03, // SMB 3.0
+        0x02, 0x03, // SMB 3.0.2
+        0x11, 0x03, // SMB 3.1.1
+    ];
+    
+    if timeout(dur, stream.write_all(&smb_request)).await.is_err() {
+        return None;
+    }
+    
+    // Try to read response
+    let mut buf = [0u8; 256];
+    match timeout(dur, stream.read(&mut buf)).await {
+        Ok(Ok(n)) if n >= 8 => {
+            // Check for SMB2/SMB3 response signature "\xfeSMB"
+            // NetBIOS header (4 bytes) + SMB2 signature (4 bytes)
+            if n >= 8 && buf[4] == 0xfe && buf[5] == 0x53 && buf[6] == 0x4d && buf[7] == 0x42 {
+                Some("SMB".to_string())
+            } else {
+                None
+            }
+        },
+        _ => None,
+    }
+}
+
 /// Extended probe - aggressive last-resort check with multiple probe strings
 /// Sends multiple patterns to trigger response from slow or stubborn services
 /// If service closes at any point, proves it's working (just slow)
@@ -323,6 +394,11 @@ pub async fn layer7_probe(dest: &str, port: u16, timeout_ms: u64) -> Option<Stri
     
     // Try RDP (Remote Desktop Protocol)
     if let Some(protocol) = try_rdp_handshake(dest, port, timeout_ms).await {
+        return Some(protocol);
+    }
+    
+    // Try SMB (Server Message Block / Windows file sharing)
+    if let Some(protocol) = try_smb_handshake(dest, port, timeout_ms).await {
         return Some(protocol);
     }
     

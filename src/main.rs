@@ -438,7 +438,7 @@ async fn main() {
         println!("     - Timeout: 100ms\n");
         println!("  3. Layer 7 Protocol Probing (if timeout/timeout at Layer 4):");
         println!("     - Only runs for ambiguous timeout/timeout cases");
-        println!("     - Tries: TLS, HTTP, MySQL, PostgreSQL, RDP handshakes");
+        println!("     - Tries: TLS, HTTP, MySQL, PostgreSQL, RDP, SMB handshakes");
         println!("     - Stops at first successful protocol detection");
         println!("     - Timeout: 1000ms per protocol\n");
         println!("  4. Extended Probe (last resort if all Layer 7 checks fail):");
@@ -481,6 +481,8 @@ async fn main() {
         println!("    Rx: timeout | Tx: timeout | Layer7: MySQL → Suspicious? NO (MySQL)");
         println!("  • Real RDP (client-first with Layer 7 detection):");
         println!("    Rx: timeout | Tx: timeout | Layer7: RDP → Suspicious? NO (RDP)");
+        println!("  • Real SMB (client-first with Layer 7 detection):");
+        println!("    Rx: timeout | Tx: timeout | Layer7: SMB → Suspicious? NO (SMB)");
         println!("  • Slow service (responds to extended probe):");
         println!("    Rx: timeout | Tx: timeout | Layer7: none | Extended: closes → NO (Responsive)");
         println!("  • Receive-only service (stays silent through all probes):");
