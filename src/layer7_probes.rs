@@ -185,6 +185,60 @@ pub async fn try_postgres_handshake(dest: &str, port: u16, timeout_ms: u64) -> O
     }
 }
 
+/// Try RDP (Remote Desktop Protocol) handshake
+/// RDP uses X.224 Connection Request/Confirm for initial handshake
+pub async fn try_rdp_handshake(dest: &str, port: u16, timeout_ms: u64) -> Option<String> {
+    let addr = format!("{}:{}", dest, port);
+    let dur = Duration::from_millis(timeout_ms);
+    
+    let mut stream = match timeout(dur, TcpStream::connect(&addr)).await {
+        Ok(Ok(s)) => s,
+        _ => return None,
+    };
+    
+    // X.224 Connection Request PDU (minimal RDP connection request)
+    // TPKT Header (4 bytes) + X.224 Connection Request
+    let rdp_request = vec![
+        // TPKT Header
+        0x03, // Version 3
+        0x00, // Reserved
+        0x00, 0x13, // Length: 19 bytes total
+        
+        // X.224 Connection Request
+        0x0e, // Length of X.224 data: 14 bytes
+        0xe0, // PDU Type: Connection Request (0xe0)
+        0x00, 0x00, // Destination reference (0)
+        0x00, 0x00, // Source reference (0)
+        0x00, // Class and options
+        
+        // RDP Negotiation Request (optional, but helps identify RDP)
+        0x01, // Type: TYPE_RDP_NEG_REQ
+        0x00, // Flags
+        0x08, 0x00, // Length: 8 bytes
+        0x00, 0x00, 0x00, 0x00, // Requested protocols (PROTOCOL_RDP)
+    ];
+    
+    if timeout(dur, stream.write_all(&rdp_request)).await.is_err() {
+        return None;
+    }
+    
+    // Try to read response
+    let mut buf = [0u8; 256];
+    match timeout(dur, stream.read(&mut buf)).await {
+        Ok(Ok(n)) if n >= 11 => {
+            // Check for TPKT header (version 3) and X.224 Connection Confirm (0xd0)
+            // TPKT: buf[0] = 0x03, buf[1] = 0x00
+            // X.224 Connection Confirm: buf[5] = 0xd0
+            if n >= 11 && buf[0] == 0x03 && buf[5] == 0xd0 {
+                Some("RDP".to_string())
+            } else {
+                None
+            }
+        },
+        _ => None,
+    }
+}
+
 /// Extended probe - aggressive last-resort check with multiple probe strings
 /// Sends multiple patterns to trigger response from slow or stubborn services
 /// If service closes at any point, proves it's working (just slow)
@@ -264,6 +318,11 @@ pub async fn layer7_probe(dest: &str, port: u16, timeout_ms: u64) -> Option<Stri
     
     // Try PostgreSQL
     if let Some(protocol) = try_postgres_handshake(dest, port, timeout_ms).await {
+        return Some(protocol);
+    }
+    
+    // Try RDP (Remote Desktop Protocol)
+    if let Some(protocol) = try_rdp_handshake(dest, port, timeout_ms).await {
         return Some(protocol);
     }
     

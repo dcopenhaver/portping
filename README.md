@@ -11,7 +11,7 @@ NOTE: Built and intended for internal IT diagnostics, purpose built to solve a p
 - **Parallel Port Scanning**: Check multiple ports simultaneously for fast results
 - **Clean Table Output**: Results displayed in formatted tables for easy reading
 - **Inspection Mode**: Detect proxy interception and network anomalies with `--inspect`
-  - **Layer 7 Protocol Detection**: Automatically identifies TLS, HTTP, MySQL, PostgreSQL, and more
+  - **Layer 7 Protocol Detection**: Automatically identifies TLS, HTTP, MySQL, PostgreSQL, RDP, and more
   - **Banner Grabbing**: Captures service banners for identification
   - **Timing Analysis**: Detects suspiciously fast connections that indicate local proxies
   - **IP Verification**: Confirms responding IP matches intended destination
@@ -83,7 +83,7 @@ Inspection mode performs testing on each port reported open:
 
 1. **Rx Test (Receive)**: Passively waits for service banners (100ms timeout)
 2. **Tx Test (Transmit)**: Sends probe data and reads response (100ms timeout)
-3. **Layer 7 Probing**: Tests TLS, HTTP, MySQL, PostgreSQL protocols (1000ms per protocol)
+3. **Layer 7 Probing**: Tests TLS, HTTP, MySQL, PostgreSQL, RDP protocols (1000ms per protocol)
 4. **Extended Probe**: Sends 5 probe strings to trigger slow services (200ms per probe)
 
 #### Suspicious Detection Levels
@@ -103,7 +103,7 @@ Inspection mode performs testing on each port reported open:
 **NO - Not Suspicious**
 - Service sends banner or responds to probes
 - Protocol validation successful (e.g., HTTP closes after invalid request)
-- Layer 7 protocol detected (TLS, HTTP, MySQL, PostgreSQL)
+- Layer 7 protocol detected (TLS, HTTP, MySQL, PostgreSQL, RDP)
 - Extended probe confirms service is responsive
 
 #### Example Output
