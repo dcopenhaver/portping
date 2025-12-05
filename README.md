@@ -4,7 +4,7 @@ A fast, parallel TCP port scanner with some limited inspection capabilities to d
 
 NOTE: Built and intended for internal IT diagnostics, purpose built to solve a problem I was having, only scans one single target host at a time. If you want a comprehensive port scanner, use nmap, not this.
 
-**portping** goes beyond basic port scanning with the --inspect option by performing some Layer 4 and Layer 7 analysis to determine if ports are genuinely open or potentially being intercepted by proxies (like ZTNA solutions). This is particularly useful for validating internal network connectivity and detecting scenarios that may report ports as "open" when they're actually being blocked or proxied.
+**portping** goes beyond basic port scanning with the --inspect option by performing some Layer 4 and Layer 7 analysis to determine if ports are genuinely open or potentially being intercepted by proxies (like ZTNA solutions). This is particularly useful for validating internal network connectivity and detecting scenarios that may report ports as "open" when you haven't actually even reached the expected endpoint yet. Instead you may be connecting to an intermediary system so the initial TCP handshake completes reporting that as open.
 
 ## Features
 
